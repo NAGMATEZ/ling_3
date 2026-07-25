@@ -1,15 +1,24 @@
-import Database from 'better-sqlite3';
+import { Database } from 'sql.js';
 import { v4 as uuid } from 'uuid';
-import path from 'path';
-import fs from 'fs';
 
-const DB_PATH = path.join(process.cwd(), 'retros.db');
-const db = new Database(DB_PATH);
+const DB_PATH = ':memory:';
 
-db.pragma('journal_mode = WAL');
-db.pragma('foreign_keys = ON');
+let db: Database | null = null;
+let dbInitialized = false;
+
+function getDB(): Database {
+  if (!db || !dbInitialized) {
+    initDB();
+  }
+  return db!;
+}
 
 export function initDB() {
+  if (db) {
+    try { db.close(); } catch {}
+    db = null;
+  }
+  db = new Database();
   db.exec(`
     CREATE TABLE IF NOT EXISTS sessions (
       id TEXT PRIMARY KEY,
@@ -55,6 +64,7 @@ export function initDB() {
     CREATE INDEX IF NOT EXISTS idx_votes_action ON votes(action_id);
     CREATE INDEX IF NOT EXISTS idx_history_completed ON retro_history(completed_at DESC);
   `);
+  dbInitialized = true;
 }
 
 export function generateShareCode(): string {
@@ -63,7 +73,7 @@ export function generateShareCode(): string {
   for (let i = 0; i < 6; i++) {
     code += chars[Math.floor(Math.random() * chars.length)];
   }
-  const existing = db.prepare('SELECT id FROM sessions WHERE share_code = ?').get(code) as any;
+  const existing = getDB().prepare('SELECT id FROM sessions WHERE share_code = ?').get(code) as any;
   if (existing) return generateShareCode();
   return code;
 }
@@ -72,20 +82,20 @@ export function createSession(title: string): { id: string; shareCode: string } 
   const id = uuid();
   const shareCode = generateShareCode();
   const now = Date.now();
-  db.prepare('INSERT INTO sessions (id, share_code, title, phase, created_at) VALUES (?, ?, ?, ?, ?)').run(id, shareCode, title, 'what_went_well', now);
+  getDB().prepare('INSERT INTO sessions (id, share_code, title, phase, created_at) VALUES (?, ?, ?, ?, ?)').run(id, shareCode, title, 'what_went_well', now);
   return { id, shareCode };
 }
 
 export function getSessionById(id: string): any {
-  return db.prepare('SELECT * FROM sessions WHERE id = ?').get(id);
+  return getDB().prepare('SELECT * FROM sessions WHERE id = ?').get(id);
 }
 
 export function getSessionByShareCode(code: string): any {
-  return db.prepare('SELECT * FROM sessions WHERE share_code = ?').get(code);
+  return getDB().prepare('SELECT * FROM sessions WHERE share_code = ?').get(code);
 }
 
 export function getSessionByShareCodeJoin(code: string): any {
-  return db.prepare(`
+  return getDB().prepare(`
     SELECT s.*, 
       (SELECT COUNT(*) FROM actions a WHERE a.session_id = s.id) as action_count,
       (SELECT COUNT(*) FROM votes v WHERE v.session_id = s.id) as vote_count
@@ -94,51 +104,51 @@ export function getSessionByShareCodeJoin(code: string): any {
 }
 
 export function updateSessionPhase(id: string, phase: string): void {
-  db.prepare('UPDATE sessions SET phase = ? WHERE id = ?').run(phase, id);
+  getDB().prepare('UPDATE sessions SET phase = ? WHERE id = ?').run(phase, id);
 }
 
 export function addAction(sessionId: string, type: string, author: string, text: string): any {
   const id = uuid();
   const now = Date.now();
-  db.prepare('INSERT INTO actions (id, session_id, type, author, text, created_at) VALUES (?, ?, ?, ?, ?, ?)').run(id, sessionId, type, author, text, now);
+  getDB().prepare('INSERT INTO actions (id, session_id, type, author, text, created_at) VALUES (?, ?, ?, ?, ?, ?)').run(id, sessionId, type, author, text, now);
   return getActionById(id);
 }
 
 export function getActionById(id: string): any {
-  return db.prepare('SELECT * FROM actions WHERE id = ?').get(id);
+  return getDB().prepare('SELECT * FROM actions WHERE id = ?').get(id);
 }
 
 export function getActionsBySession(sessionId: string): any[] {
-  return db.prepare('SELECT * FROM actions WHERE session_id = ? ORDER BY created_at ASC').all(sessionId);
+  return getDB().prepare('SELECT * FROM actions WHERE session_id = ? ORDER BY created_at ASC').all(sessionId) as any[];
 }
 
 export function addVote(sessionId: string, actionId: string, voterName: string): { voteCount: number; voters: string[] } | null {
-  const existing = db.prepare('SELECT id FROM votes WHERE session_id = ? AND action_id = ? AND voter_name = ?').get(sessionId, actionId, voterName);
+  const existing = getDB().prepare('SELECT id FROM votes WHERE session_id = ? AND action_id = ? AND voter_name = ?').get(sessionId, actionId, voterName);
   if (existing) {
     return getVoteInfo(sessionId, actionId);
   }
   const id = uuid();
   const now = Date.now();
-  db.prepare('INSERT INTO votes (id, session_id, action_id, voter_name, created_at) VALUES (?, ?, ?, ?, ?)').run(id, sessionId, actionId, voterName, now);
+  getDB().prepare('INSERT INTO votes (id, session_id, action_id, voter_name, created_at) VALUES (?, ?, ?, ?, ?)').run(id, sessionId, actionId, voterName, now);
   return getVoteInfo(sessionId, actionId);
 }
 
 export function removeVote(sessionId: string, actionId: string, voterName: string): { voteCount: number; voters: string[] } | null {
-  db.prepare('DELETE FROM votes WHERE session_id = ? AND action_id = ? AND voter_name = ?').run(sessionId, actionId, voterName);
+  getDB().prepare('DELETE FROM votes WHERE session_id = ? AND action_id = ? AND voter_name = ?').run(sessionId, actionId, voterName);
   return getVoteInfo(sessionId, actionId);
 }
 
 function getVoteInfo(sessionId: string, actionId: string): { voteCount: number; voters: string[] } {
-  const rows = db.prepare('SELECT voter_name FROM votes WHERE session_id = ? AND action_id = ?').all(sessionId, actionId) as any[];
+  const rows = getDB().prepare('SELECT voter_name FROM votes WHERE session_id = ? AND action_id = ?').all(sessionId, actionId) as any[];
   return { voteCount: rows.length, voters: rows.map(r => r.voter_name) };
 }
 
 export function getVotesByAction(actionId: string): any[] {
-  return db.prepare('SELECT * FROM votes WHERE action_id = ? ORDER BY created_at ASC').all(actionId);
+  return getDB().prepare('SELECT * FROM votes WHERE action_id = ? ORDER BY created_at ASC').all(actionId);
 }
 
 export function getVotesBySession(sessionId: string): any[] {
-  return db.prepare('SELECT * FROM votes WHERE session_id = ? ORDER BY created_at ASC').all(sessionId);
+  return getDB().prepare('SELECT * FROM votes WHERE session_id = ? ORDER BY created_at ASC').all(sessionId);
 }
 
 export function completeSession(sessionId: string): any {
@@ -146,25 +156,25 @@ export function completeSession(sessionId: string): any {
   if (!session) return null;
   const actions = getActionsBySession(sessionId);
   const votes = getVotesBySession(sessionId);
-  const startCount = actions.filter((a: any) => a.type === 'start').length;
-  const stopCount = actions.filter((a: any) => a.type === 'stop').length;
-  const continueCount = actions.filter((a: any) => a.type === 'continue').length;
+  const startCount = (actions as any[]).filter((a: any) => a.type === 'start').length;
+  const stopCount = (actions as any[]).filter((a: any) => a.type === 'stop').length;
+  const continueCount = (actions as any[]).filter((a: any) => a.type === 'continue').length;
   const completedAt = Date.now();
-  db.prepare('UPDATE sessions SET phase = ?, completed_at = ? WHERE id = ?').run('complete', completedAt, sessionId);
-  db.prepare('INSERT OR REPLACE INTO retro_history (id, session_id, title, completed_at, total_actions, total_votes, start_count, stop_count, continue_count) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+  getDB().prepare('UPDATE sessions SET phase = ?, completed_at = ? WHERE id = ?').run('complete', completedAt, sessionId);
+  getDB().prepare('INSERT OR REPLACE INTO retro_history (id, session_id, title, completed_at, total_actions, total_votes, start_count, stop_count, continue_count) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
     .run(uuid(), sessionId, session.title, completedAt, actions.length, votes.length, startCount, stopCount, continueCount);
   return { sessionId, title: session.title, completedAt, totalActions: actions.length, totalVotes: votes.length, startCount, stopCount, continueCount };
 }
 
 export function getHistory(): any[] {
-  return db.prepare(`
+  return getDB().prepare(`
     SELECT h.*, s.share_code FROM retro_history h
     JOIN sessions s ON h.session_id = s.id
     ORDER BY h.completed_at DESC
     LIMIT 50
-  `).all();
+  `).all() as any[];
 }
 
 export function getConnectedSessions(): any[] {
-  return db.prepare('SELECT * FROM sessions WHERE phase != ? ORDER BY created_at DESC').all('complete');
+  return getDB().prepare('SELECT * FROM sessions WHERE phase != ? ORDER BY created_at DESC').all('complete') as any[];
 }

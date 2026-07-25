@@ -2,9 +2,8 @@ import express from 'express';
 import cors from 'cors';
 import http from 'http';
 import { WebSocketServer, WebSocket } from 'ws';
-import { v4 as uuid } from 'uuid';
 import { initDB, createSession, getSessionById, getSessionByShareCode, getActionsBySession, getVotesBySession, addAction, addVote, removeVote, updateSessionPhase, completeSession, getHistory, getConnectedSessions } from './db.js';
-import { AnyWSMessage, Session } from './types.js';
+import { AnyWSMessage } from './types.js';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
@@ -16,7 +15,6 @@ initDB();
 const app = express();
 app.use(cors());
 app.use(express.json());
-app.use(express.static(path.join(__dirname, '../frontend/dist')));
 
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server, path: '/ws' });
@@ -186,12 +184,16 @@ app.get('/api/history', (_req, res) => {
   res.json(history);
 });
 
-// Fallback to index.html for SPA routing
-app.get('*', (_req, res) => {
-  res.sendFile(path.join(__dirname, '../frontend/dist/index.html'));
-});
+// For Vercel serverless: export as a handler
+export const handler = (req: any, res: any) => {
+  // Pass through to express
+  app(req, res);
+};
 
-server.listen(PORT, () => {
-  console.log(`Server running on http://localhost:${PORT}`);
-  console.log(`WebSocket server on ws://localhost:${PORT}/ws`);
-});
+// Only start server when running directly (not as a serverless function)
+if (process.env.VERCEL !== '1') {
+  server.listen(PORT, () => {
+    console.log(`Server running on http://localhost:${PORT}`);
+    console.log(`WebSocket server on ws://localhost:${PORT}/ws`);
+  });
+}
